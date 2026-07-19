@@ -1,6 +1,9 @@
 package main
 
-import "log"
+import (
+	"log"
+	"time"
+)
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
@@ -12,8 +15,8 @@ func main() {
 	server := &Server{
 		Addr:         ":1965",
 		Handler:      router,
-		ReadTimeOut:  5,
-		WriteTimeOut: 5,
+		ReadTimeOut:  5 * time.Second,
+		WriteTimeOut: 5 * time.Second,
 		CertFile:     "cert/server.crt",
 		KeyFile:      "cert/server.key",
 	}
