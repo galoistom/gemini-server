@@ -1,0 +1,10 @@
+package main
+
+import "log"
+
+func main() {
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	router := NewRouter()
+	router.Handle("/", homeHandler)
+	router.Handle("/about", aboutHandler)
+}

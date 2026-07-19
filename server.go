@@ -1,0 +1,129 @@
+package main
+
+import (
+	"bufio"
+	"crypto/tls"
+	"fmt"
+	"log"
+	"net"
+	"strings"
+	"time"
+)
+
+type Server struct {
+	Addr         string
+	Handler      Handler
+	ReadTimeOut  time.Duration
+	WriteTimeOut time.Duration
+	CertFile     string
+	KeyFile      string
+}
+
+type Handler interface {
+	ServeGemini(w ResponseWriter, r *Request)
+}
+
+type HandlerFunc func(w ResponseWriter, r *Request)
+
+func (f HandlerFunc) ServeGemini(w ResponseWriter, r *Request) {
+	f(w, r)
+}
+
+type Request struct {
+	URL  string
+	Host string
+	Raw  string
+	Path string
+	Conn net.Conn
+}
+
+type ResponseWriter interface {
+	WriteHeader(status int, meta string) error
+	Write(data []byte) (int, error)
+	WriteString(s string) (int, error)
+	SetStatus(status int, meta string)
+}
+
+func (s *Server) ListenAndServe() error {
+	cert, err := tls.LoadX509KeyPair(s.CertFile, s.KeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to load certfile: %v", err)
+	}
+	config := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	listen, err := tls.Listen("tcp", s.Addr, config)
+	if err != nil {
+		return fmt.Errorf("failed to listen: %v", err)
+	}
+	defer listen.Close()
+
+	log.Printf("Gemini server started as: %s", s.Addr)
+
+	for {
+		conn, err := listen.Accept()
+		if err != nil {
+			log.Printf("faild to accept: %v", err)
+			continue
+		}
+		go s.handleConnection(conn)
+	}
+}
+
+func (s *Server) handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	if s.ReadTimeOut > 0 {
+		conn.SetReadDeadline(time.Now().Add(s.ReadTimeOut))
+	}
+
+	reader := bufio.NewReader(conn)
+	requestLine, err := reader.ReadString('\n')
+	if err != nil {
+		log.Printf("request failed: %v", err)
+		s.sendError(conn, 59, "failed to read request")
+		return
+	}
+	requestLine = strings.TrimRight(requestLine, "\r\n")
+	log.Printf("message received: %s", requestLine)
+	req, err := parseRequest(requestLine, conn)
+	if err != nil {
+		log.Printf("parse failed: %v", err)
+		s.sendError(conn, 59, "invalid request")
+		return
+	}
+	resp := newResponse(conn)
+	if s.Handler != nil {
+		s.Handler.ServeGemini(resp, req)
+	} else {
+		s.sendError(conn, 51, "no handler")
+	}
+}
+
+func (s *Server) sendError(conn net.Conn, status int, message string) {
+	resp := newResponse(conn)
+	resp.WriteHeader(status, message)
+}
+
+func parseRequest(line string, conn net.Conn) (*Request, error) {
+	if !strings.HasPrefix(line, "gemini://") {
+		return nil, fmt.Errorf("not a gemini connection")
+	}
+	url := strings.TrimPrefix(line, "gemini://")
+	var path string
+	parts := strings.SplitN(url, "/", 2)
+	if len(parts) > 1 {
+		path = "/" + parts[1]
+	} else {
+		path = "/"
+	}
+	return &Request{
+		URL:  line,
+		Host: parts[0],
+		Path: path,
+		Raw:  line,
+		Conn: conn,
+	}, nil
+}
